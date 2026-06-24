@@ -23,10 +23,10 @@ Launch the interactive TUI, configure your collection date range and filter rule
 │                 │   │                                 │
 │ Start date      │   │ Input DB          Preview/Exec  │
 │ End date        │   │ Config file       buttons       │
-│ Enrich toggle   │   │ Keep keywords                  │
-│ Delay           │   │ Remove keywords                │
-│                 │   │ Dry-run switch                 │
-│ [▶ Start] [←]  │   │ [◐ Preview][▶ Execute][←]      │
+│ Enrich toggle   │   │ Keep keywords                   │
+│ Delay           │   │ Remove keywords                 │
+│                 │   │ Dry-run switch                  │
+│ [▶ Start] [←]   │   │ [◐ Preview][▶ Execute][←]       │
 │ ████████████    │   │                                 │
 │ Log output...   │   │ Log output...                   │
 └─────────────────┘   └─────────────────────────────────┘
