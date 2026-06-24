@@ -6,9 +6,9 @@ Launch the interactive TUI, configure your collection date range and filter rule
 
 ```text
 ┌─────────────────────────┐
-│    $  MarketGPR          │
+│    $  MarketGPR         │
 │   Prediction-market     │
-│        pipeline          │
+│        pipeline         │
 │                         │
 │  [◉ Collect Contracts]  │
 │  [◌ Clean Contracts]    │
