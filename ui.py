@@ -184,21 +184,19 @@ class CollectScreen(Screen):
                         Input(value=today_str, id="co-end", placeholder="e.g. 2026-06-23"),
                         Label("Output path"),
                         Input(value=db_default, id="co-db", placeholder="data/kalshi_catalog.db"),
-                        Horizontal(
-                            Switch(value=False, id="co-enrich"),
-                            Label("Enrich event titles"),
-                            id="switch-row",
-                        ),
                         id="co-left",
                     ),
                     Vertical(
                         Label("Delay  (s / page)"),
                         Input(value="0.1", id="co-delay", placeholder="0.1"),
-                        Label(""),
-                        Label(""),
                         Horizontal(
                             Button("  ▶  Start Collection", id="co-run", variant="primary"),
                             Button("  ←  Back", id="co-back", variant="default"),
+                        ),
+                        Horizontal(
+                            Switch(value=False, id="co-enrich"),
+                            Label("Enrich event titles"),
+                            id="switch-row",
                         ),
                         id="co-right",
                     ),
@@ -219,9 +217,8 @@ class CollectScreen(Screen):
         self.app.sub_title = "Collect"
 
     @on(Button.Pressed, "#co-back")
-    def on_back(self):
-        if not self.running:
-            self.dismiss()
+    def go_back(self):
+        self.app.pop_screen()
 
     @on(Button.Pressed, "#co-run")
     def on_run(self):
@@ -229,7 +226,6 @@ class CollectScreen(Screen):
             return
         self.running = True
         self.query_one("#co-run", Button).disabled  = True
-        self.query_one("#co-back", Button).disabled = True
         self.query_one("#co-run", Button).label     = "  ⋯  Running ..."
 
         log = self.query_one("#co-log", RichLog)
@@ -271,7 +267,6 @@ class CollectScreen(Screen):
                 progress.display = False
                 self.running = False
                 self.query_one("#co-run", Button).disabled  = False
-                self.query_one("#co-back", Button).disabled = False
                 self.query_one("#co-run", Button).label     = "  ▶  Start Collection"
                 if msg:
                     log.write(f"\n[bold #2ecc71]✓ {msg}[/]")
@@ -397,24 +392,20 @@ class CleanScreen(Screen):
                         Input(value="", id="cl-keep", placeholder="election, war, conflict"),
                         Label("Remove keywords  (comma-separated)"),
                         Input(value="", id="cl-remove", placeholder="NBA, NFL, crypto"),
-                        Horizontal(
-                            Switch(value=False, id="cl-dryrun"),
-                            Label("Dry-run only  (preview before writing)"),
-                            id="switch-row",
-                        ),
                         id="cl-left",
                     ),
                     Vertical(
                         Label("Output path  (optional)"),
                         Input(value="", id="cl-output", placeholder="data/kalshi_catalog_cleaned.db"),
-                        Label(""),
-                        Label(""),
-                        Label(""),
-                        Label(""),
                         Horizontal(
                             Button("  ◐  Preview",  id="cl-preview", variant="primary"),
                             Button("  ▶  Execute",   id="cl-execute", variant="warning"),
                             Button("  ←  Back",      id="cl-back",    variant="default"),
+                        ),
+                        Horizontal(
+                            Switch(value=False, id="cl-dryrun"),
+                            Label("Dry-run only  (preview before writing)"),
+                            id="switch-row",
                         ),
                         id="cl-right",
                     ),
@@ -431,9 +422,8 @@ class CleanScreen(Screen):
         self.app.sub_title = "Clean"
 
     @on(Button.Pressed, "#cl-back")
-    def on_back(self):
-        if not self.running:
-            self.dismiss()
+    def go_back(self):
+        self.app.pop_screen()
 
     def _gather_rules(self):
         """Collect keep/remove rules from config file and inline fields."""
@@ -495,7 +485,6 @@ class CleanScreen(Screen):
         self.running = True
         self.query_one("#cl-preview", Button).disabled = True
         self.query_one("#cl-execute", Button).disabled = True
-        self.query_one("#cl-back", Button).disabled    = True
 
         log = self.query_one("#cl-log", RichLog)
         log.clear()
@@ -551,7 +540,6 @@ class CleanScreen(Screen):
                 self.running = False
                 self.query_one("#cl-preview", Button).disabled = False
                 self.query_one("#cl-execute", Button).disabled = False
-                self.query_one("#cl-back", Button).disabled    = False
 
         if self.running:
             self.set_timer(0.3, self._poll_log)
@@ -669,11 +657,16 @@ class MarketGPRApp(App):
 
     #co-right, #cl-right {{
         width: 2fr;
+        height: auto;
+    }}
+
+    #co-right Button, #cl-right Button {{
+        min-width: 22;
     }}
 
     #switch-row {{
-        margin-top: 1;
         align: left middle;
+        margin: 0;
     }}
 
     #switch-row Label {{
