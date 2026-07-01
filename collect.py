@@ -62,7 +62,7 @@ def parse_date(value: str) -> int:
         return int(value)
     except ValueError:
         pass
-    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
         try:
             return int(datetime.strptime(value, fmt)
                        .replace(tzinfo=timezone.utc).timestamp())
