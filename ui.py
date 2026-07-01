@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from queue import Empty, Queue
 from typing import Optional
 
@@ -168,7 +168,7 @@ class CollectScreen(Screen):
 
     def compose(self) -> ComposeResult:
         today      = datetime.now(timezone.utc)
-        week_ago   = today.replace(day=today.day - 7).strftime("%Y-%m-%d")
+        week_ago   = (today - timedelta(days=7)).strftime("%Y-%m-%d")
         today_str  = today.strftime("%Y-%m-%d")
         db_default = os.path.join(DATA_DIR, "kalshi_catalog.db")
 
