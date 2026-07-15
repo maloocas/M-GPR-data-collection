@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Kalshi Contract Catalog Builder.
 
 Collects every Kalshi contract (ticker, name, expiry date, event ticker)
@@ -9,12 +8,6 @@ suitable as a lightweight index for downstream deep-data puller scripts.
 Streams data page-by-page into SQLite to keep memory use low regardless
 of dataset size.  Event-title enrichment runs as a second pass via batched
 API calls and direct DB UPDATE statements.
-
-Usage:
-  python collect.py                           # last 2 years
-  python collect.py --start 2024-06-01        # from June 2024
-  python collect.py --start 2025-01-01 --end 2025-06-30
-  python collect.py --start 1700000000 --end 1710000000  # unix timestamps
 """
 
 import argparse
@@ -27,9 +20,9 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from db import (DATA_DIR, CREATE_CONTRACTS, CREATE_ENRICH_TEMP,
-                accent, dim, header, highlight, info, init_db, ok, warn,
-                write_manifest)
+from marketgpr.db import (DATA_DIR, CREATE_CONTRACTS, CREATE_ENRICH_TEMP,
+                          accent, dim, header, highlight, info, init_db, ok, warn,
+                          write_manifest)
 
 PROD_BASE   = os.environ.get("KALSHI_API_URL", "https://api.elections.kalshi.com/trade-api/v2")
 DEFAULT_START = (datetime.now(timezone.utc) - timedelta(days=730)).strftime("%Y-%m-%d")
@@ -52,10 +45,6 @@ logging.basicConfig(
 log = logging.getLogger("collect")
 
 
-# ---------------------------------------------------------------------------
-# CLI helpers
-# ---------------------------------------------------------------------------
-
 def parse_date(value: str) -> int:
     """Accept ISO date (YYYY-MM-DD) or Unix timestamp, return Unix seconds."""
     try:
@@ -70,10 +59,6 @@ def parse_date(value: str) -> int:
             continue
     raise argparse.ArgumentTypeError(f"Unrecognized date format: {value}")
 
-
-# ---------------------------------------------------------------------------
-# HTTP helpers
-# ---------------------------------------------------------------------------
 
 def _url(path: str, params: dict | None = None) -> str:
     url = f"{PROD_BASE}{path}"
@@ -112,10 +97,6 @@ def _fetch(url: str) -> dict:
     raise RuntimeError(f"Failed to fetch {url} after {MAX_RETRIES} attempts")
 
 
-# ---------------------------------------------------------------------------
-# Database helpers
-# ---------------------------------------------------------------------------
-
 def stream_insert(conn, markets: list[dict], fetched_at: str) -> int:
     """Insert a page of markets.  Name is initially set to the ticker as
     a placeholder; enrichment fills it in later.  Also populates a temp table
@@ -148,10 +129,6 @@ def stream_insert(conn, markets: list[dict], fetched_at: str) -> int:
     after = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
     return after - before
 
-
-# ---------------------------------------------------------------------------
-# Data collection phases
-# ---------------------------------------------------------------------------
 
 def get_cutoff() -> float:
     data = _fetch(_url("/historical/cutoff"))
@@ -286,21 +263,22 @@ def enrich_titles(conn, delay: float):
     conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main():
-    p = lambda s: print(s, flush=True)
-
-    parser = argparse.ArgumentParser(description="Kalshi Contract Catalog Builder")
-    parser.add_argument("--start", type=parse_date, default=parse_date(DEFAULT_START))
-    parser.add_argument("--end",   type=parse_date, default=parse_date(DEFAULT_END))
-    parser.add_argument("--db",    default=DB_PATH)
-    parser.add_argument("--delay", type=float, default=DELAY_SECONDS)
+def register_args(parser: argparse.ArgumentParser):
+    parser.add_argument("--start", type=parse_date, default=parse_date(DEFAULT_START),
+                        help="Beginning of collection window (ISO date or Unix timestamp)")
+    parser.add_argument("--end",   type=parse_date, default=parse_date(DEFAULT_END),
+                        help="End of collection window (ISO date or Unix timestamp)")
+    parser.add_argument("--db",    default=DB_PATH,
+                        help="Path to output SQLite database")
+    parser.add_argument("--delay", type=float, default=DELAY_SECONDS,
+                        help="Pause between API page requests (seconds)")
     parser.add_argument("--no-enrich", action="store_true",
                         help="Skip event-title enrichment (leave name as event_ticker)")
-    args = parser.parse_args()
+
+
+def run(args: argparse.Namespace):
+    p = lambda s: print(s, flush=True)
+
     delay = args.delay
     start_ts = int(args.start)
     end_ts   = int(args.end)
@@ -323,7 +301,6 @@ def main():
     fetched_at = datetime.now(timezone.utc).isoformat()
     total_inserted = 0
 
-    # --- Phase 1: live markets ----------------------------------------------
     if end_ts >= cutoff:
         live_start = max(start_ts, int(cutoff))
         live_end   = end_ts
@@ -333,7 +310,6 @@ def main():
                     f" → {datetime.fromtimestamp(live_end, tz=timezone.utc).strftime('%Y-%m-%d')}"))
         total_inserted += collect_live(conn, live_start, live_end, fetched_at, delay)
 
-    # --- Phase 2: historical markets ----------------------------------------
     if start_ts < cutoff:
         p("")
         p(highlight(f">>> Phase 2: HIST  "
@@ -341,7 +317,6 @@ def main():
                     f" → cutoff"))
         total_inserted += collect_historical(conn, start_ts, fetched_at, delay)
 
-    # --- Phase 3: enrich with event titles ----------------------------------
     if not args.no_enrich and total_inserted:
         p("")
         p(highlight(">>> Phase 3: ENRICH event titles"))
@@ -357,7 +332,3 @@ def main():
     manifest_path = write_manifest(args.db, start_ts, end_ts, duration, PROD_BASE)
     p(dim(f"Manifest: {manifest_path}"))
     p("")
-
-
-if __name__ == "__main__":
-    main()

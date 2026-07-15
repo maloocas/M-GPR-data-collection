@@ -16,13 +16,11 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-# ── Paths ──────────────────────────────────────────────────────────────────
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR  = os.path.join(SCRIPT_DIR, "data")
+DATA_DIR = os.environ.get(
+    "MARKETGPR_DATA_DIR",
+    os.path.join(os.getcwd(), "data"),
+)
 os.makedirs(DATA_DIR, exist_ok=True)
-
-# ── Schema constants ───────────────────────────────────────────────────────
 
 CREATE_CONTRACTS = """CREATE TABLE IF NOT EXISTS contracts (
     ticker        TEXT PRIMARY KEY,
@@ -37,8 +35,6 @@ CREATE_ENRICH_TEMP = """CREATE TEMP TABLE IF NOT EXISTS _enrich (
     ticker       TEXT PRIMARY KEY,
     event_ticker TEXT NOT NULL
 )"""
-
-# ── ANSI colour palette (dark-blue) ────────────────────────────────────────
 
 BOLD  = "\033[1m"
 DIM   = "\033[2m"
@@ -89,8 +85,6 @@ def highlight(text: str) -> str:
     return f"{BOLD}{BRIGHT_BLUE}{text}{RESET}"
 
 
-# ── Connection management ──────────────────────────────────────────────────
-
 def init_db(db_path: str) -> sqlite3.Connection:
     """Create / open a writable SQLite connection with performance PRAGMAs."""
     conn = sqlite3.connect(db_path)
@@ -99,6 +93,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA cache_size=-65536")
     conn.execute(CREATE_CONTRACTS)
     conn.execute(CREATE_EXPIRY_IDX)
+    conn.execute(CREATE_ENRICH_TEMP)
     conn.commit()
     return conn
 
@@ -125,8 +120,6 @@ def _register_regex(conn: sqlite3.Connection) -> None:
 
     conn.create_function("REGEXP", 2, _regexp, deterministic=True)
 
-
-# ── Manifest ───────────────────────────────────────────────────────────────
 
 def write_manifest(db_path: str, start_ts: int, end_ts: int,
                    duration: float, api_base: str) -> str:

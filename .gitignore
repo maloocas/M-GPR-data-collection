@@ -12,6 +12,7 @@ collection_manifest.json
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # macOS
 .DS_Store

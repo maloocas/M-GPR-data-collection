@@ -1,33 +1,8 @@
-#!/usr/bin/env python3
 """MarketGPR Cleaner — Filter Kalshi contract databases by keywords and regex.
 
 Reads a SQLite database of Kalshi contracts, applies keep/remove filter rules
 against the name and ticker columns, and writes a cleaned copy to a new file.
 Never modifies the original database.
-
-Usage:
-  # Config-driven (primary use case)
-  python clean.py --db data/kalshi_catalog.db --config filters.json
-
-  # Ad-hoc CLI filtering
-  python clean.py --db data/kalshi_catalog.db --remove "NBA,NFL,MLB"
-  python clean.py --db data/kalshi_catalog.db --keep "BTC,ETH" --remove "15 min"
-
-  # Dry-run preview
-  python clean.py --db data/kalshi_catalog.db --config filters.json --dry-run
-
-  # Custom output path
-  python clean.py --db data/kalshi_catalog.db --config filters.json --output cleaned.db
-
-CLI flags:
-  --keep               Comma-separated keywords to KEEP (name LIKE %keyword%)
-  --remove             Comma-separated keywords to REMOVE (name LIKE %keyword%)
-  --keep-regex         Comma-separated regex patterns to KEEP (name REGEXP pattern)
-  --remove-regex       Comma-separated regex patterns to REMOVE (name REGEXP pattern)
-  --ticker-keep        Comma-separated keywords to KEEP (ticker LIKE %keyword%)
-  --ticker-remove      Comma-separated keywords to REMOVE (ticker LIKE %keyword%)
-  --ticker-keep-regex  Comma-separated regex patterns to KEEP (ticker REGEXP pattern)
-  --ticker-remove-regex  Comma-separated regex patterns to REMOVE (ticker REGEXP pattern)
 """
 
 import argparse
@@ -36,14 +11,10 @@ import os
 import sys
 from typing import List, Optional, Tuple, Union
 
-from db import (CREATE_CONTRACTS, CREATE_EXPIRY_IDX, DATA_DIR,
-                accent, dim, header, highlight, info, ok, warn,
-                connect_readonly)
+from marketgpr.db import (CREATE_CONTRACTS, CREATE_EXPIRY_IDX, DATA_DIR,
+                          accent, dim, header, highlight, info, ok, warn,
+                          connect_readonly)
 
-
-# ---------------------------------------------------------------------------
-# Filter rule representation
-# ---------------------------------------------------------------------------
 
 class FilterRule:
     """A single filter rule: keep or remove, matching against a column."""
@@ -54,7 +25,7 @@ class FilterRule:
                  match_type: str = "like"):
         self.pattern    = pattern
         self.field      = field
-        self.match_type = match_type  # "like" or "regex"
+        self.match_type = match_type
 
     def to_sql(self) -> Tuple[str, list]:
         """Return (SQL fragment, parameter list) for this rule."""
@@ -68,10 +39,6 @@ class FilterRule:
         op = "~" if self.match_type == "regex" else "LIKE"
         return f"{self.field} {op} {self.pattern!r}"
 
-
-# ---------------------------------------------------------------------------
-# Filter loading
-# ---------------------------------------------------------------------------
 
 def load_json_config(path: str) -> dict:
     """Load filter rules from a JSON config file."""
@@ -124,10 +91,6 @@ def parse_cli_keywords(
     ]
 
 
-# ---------------------------------------------------------------------------
-# SQL building
-# ---------------------------------------------------------------------------
-
 def build_where_clause(rules: List[FilterRule]) -> Tuple[str, list]:
     """Build a WHERE clause that OR's together all provided rules.
 
@@ -147,10 +110,6 @@ def build_where_clause(rules: List[FilterRule]) -> Tuple[str, list]:
     return ("(" + " OR ".join(clauses) + ")", params)
 
 
-# ---------------------------------------------------------------------------
-# Core filtering
-# ---------------------------------------------------------------------------
-
 def filter_database(
     input_db: str,
     output_db: str,
@@ -162,12 +121,10 @@ def filter_database(
 
     Returns a dict of stats: original, keep_pass, remove_drop, final.
     """
-    # --- Open input (read-only via db helper) ---
     conn = connect_readonly(input_db)
 
     original = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
 
-    # --- Build the filtered query ---
     keep_where, keep_params = build_where_clause(keep_rules)
     remove_where, remove_params = build_where_clause(remove_rules)
 
@@ -185,7 +142,6 @@ def filter_database(
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
 
-    # --- Dry-run: preview only ---
     if dry_run:
         count_sql = sql.replace(
             "SELECT rowid, ticker, name, expiry_date, fetched_at",
@@ -237,7 +193,6 @@ def filter_database(
             "final":       final_count,
         }
 
-    # --- Production: write output DB ---
     count_sql = sql.replace(
         "SELECT rowid, ticker, name, expiry_date, fetched_at",
         "SELECT COUNT(*)",
@@ -264,7 +219,6 @@ def filter_database(
             keep_params + remove_params if keep_rules else remove_params,
         ).fetchone()[0]
 
-    # --- Write output ---
     if os.path.exists(output_db):
         os.remove(output_db)
 
@@ -284,7 +238,6 @@ def filter_database(
     out_conn.close()
     conn.close()
 
-    # --- Report ---
     p = lambda s: print(s, flush=True)
     p("")
     p(accent(f"Original:        {original:>10,} rows"))
@@ -360,49 +313,6 @@ def _print_removed_samples(
             p(dim(f"  {ticker:<50}  ") + name)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="MarketGPR Cleaner — Filter Kalshi contract databases by keywords and regex",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python clean.py --db data/kalshi_catalog.db --config filters.json
-  python clean.py --db data/kalshi_catalog.db --remove "NBA,NFL,MLB"
-  python clean.py --db data/kalshi_catalog.db --keep "BTC,ETH" --remove "15 min"
-  python clean.py --db data/kalshi_catalog.db --config filters.json --dry-run
-  python clean.py --db data/kalshi_catalog.db --config filters.json --output cleaned.db
-""",
-    )
-
-    parser.add_argument("--db", required=True, help="Path to input SQLite database")
-    parser.add_argument(
-        "--config",
-        help="Path to JSON config file with filter rules (keep/remove arrays)",
-    )
-    parser.add_argument(
-        "--output",
-        help="Path to output SQLite database (default: data/kalshi_catalog_cleaned.db)",
-    )
-
-    parser.add_argument("--keep",          help="Comma-separated keywords to KEEP (name LIKE)")
-    parser.add_argument("--remove",        help="Comma-separated keywords to REMOVE (name LIKE)")
-    parser.add_argument("--keep-regex",    help="Comma-separated regex patterns to KEEP (name REGEXP)")
-    parser.add_argument("--remove-regex",  help="Comma-separated regex patterns to REMOVE (name REGEXP)")
-    parser.add_argument("--ticker-keep",         help="Comma-separated keywords to KEEP (ticker LIKE)")
-    parser.add_argument("--ticker-remove",       help="Comma-separated keywords to REMOVE (ticker LIKE)")
-    parser.add_argument("--ticker-keep-regex",   help="Comma-separated regex patterns to KEEP (ticker REGEXP)")
-    parser.add_argument("--ticker-remove-regex", help="Comma-separated regex patterns to REMOVE (ticker REGEXP)")
-
-    parser.add_argument("--dry-run", action="store_true", help="Preview only, do not write output")
-    parser.add_argument("-y", "--yes",  action="store_true", help="Skip confirmation prompt")
-
-    return parser
-
-
 def resolve_output_path(input_db: str, output_arg: Optional[str]) -> str:
     """Determine the output database path.  Defaults to data/<input>_cleaned.db."""
     if output_arg:
@@ -412,11 +322,24 @@ def resolve_output_path(input_db: str, output_arg: Optional[str]) -> str:
     return os.path.join(DATA_DIR, f"{base}_cleaned.db")
 
 
-def main() -> None:
-    p = lambda s: print(s, flush=True)
+def register_args(parser: argparse.ArgumentParser):
+    parser.add_argument("--db", required=True, help="Path to input SQLite database")
+    parser.add_argument("--config", help="Path to JSON config file with filter rules (keep/remove arrays)")
+    parser.add_argument("--output", help="Path to output SQLite database (default: data/<input>_cleaned.db)")
+    parser.add_argument("--keep",          help="Comma-separated keywords to KEEP (name LIKE)")
+    parser.add_argument("--remove",        help="Comma-separated keywords to REMOVE (name LIKE)")
+    parser.add_argument("--keep-regex",    help="Comma-separated regex patterns to KEEP (name REGEXP)")
+    parser.add_argument("--remove-regex",  help="Comma-separated regex patterns to REMOVE (name REGEXP)")
+    parser.add_argument("--ticker-keep",         help="Comma-separated keywords to KEEP (ticker LIKE)")
+    parser.add_argument("--ticker-remove",       help="Comma-separated keywords to REMOVE (ticker LIKE)")
+    parser.add_argument("--ticker-keep-regex",   help="Comma-separated regex patterns to KEEP (ticker REGEXP)")
+    parser.add_argument("--ticker-remove-regex", help="Comma-separated regex patterns to REMOVE (ticker REGEXP)")
+    parser.add_argument("--dry-run", action="store_true", help="Preview only, do not write output")
+    parser.add_argument("-y", "--yes",  action="store_true", help="Skip confirmation prompt")
 
-    parser = build_argparser()
-    args = parser.parse_args()
+
+def run(args: argparse.Namespace):
+    p = lambda s: print(s, flush=True)
 
     if not os.path.isfile(args.db):
         p(warn(f"Error: database not found: {args.db}"))
@@ -426,7 +349,6 @@ def main() -> None:
         p(warn(f"Error: config file not found: {args.config}"))
         sys.exit(1)
 
-    # --- Load filter rules ---
     keep_rules: List[FilterRule] = []
     remove_rules: List[FilterRule] = []
 
@@ -450,7 +372,6 @@ def main() -> None:
 
     output_db = resolve_output_path(args.db, args.output)
 
-    # --- Print header ---
     p("")
     p(header("=== MarketGPR  ·  Contract Cleaner ==="))
 
@@ -487,7 +408,3 @@ def main() -> None:
         remove_rules=remove_rules,
         dry_run=args.dry_run,
     )
-
-
-if __name__ == "__main__":
-    main()

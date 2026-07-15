@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marketgpr"
+version = "0.1.0"
+description = "Kalshi prediction-market contract tools for geopolitical risk research"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+marketgpr = "marketgpr.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["marketgpr*"]

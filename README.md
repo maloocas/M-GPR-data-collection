@@ -1,51 +1,54 @@
 # MarketGPR
 
-**Two CLI scripts for building and filtering a Kalshi prediction-market contract index — designed for geopolitical risk research.**
+**Single CLI for building and filtering a Kalshi prediction-market contract index — designed for geopolitical risk research.**
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. Collect contracts from the Kalshi API into a SQLite catalog
-python collect.py --start 2026-01-01 --end 2026-07-01
+# 1. Install the package
+pip install .
 
-# 2. Filter an existing catalog by keywords and regex
-python clean.py --db data/kalshi_catalog.db --config filters.json
+# 2. Collect contracts from the Kalshi API into a SQLite catalog
+marketgpr collect --start 2026-01-01 --end 2026-07-01
 
-# 3. Dry-run to preview what would be removed
-python clean.py --db data/kalshi_catalog.db --config filters.json --dry-run
+# 3. Filter an existing catalog by keywords and regex
+marketgpr clean --db data/kalshi_catalog.db --config filters.json
+
+# 4. Dry-run to preview what would be removed
+marketgpr clean --db data/kalshi_catalog.db --config filters.json --dry-run
 ```
 
-See `python collect.py --help` or `python clean.py --help` for all options.
+See `marketgpr collect --help` or `marketgpr clean --help` for all options.
 
 ---
 
 ## Commands
 
-### `collect.py` — build the catalog
+### `marketgpr collect` — build the catalog
 
 Pulls every Kalshi contract (ticker, name, expiry date, event ticker) from both
 the live and historical API endpoints and writes them into a SQLite database.
 
 ```bash
 # Full 2-year window (default)
-python collect.py
+marketgpr collect
 
 # Custom date range
-python collect.py --start 2026-01-01 --end 2026-07-01
+marketgpr collect --start 2026-01-01 --end 2026-07-01
 
 # Unix timestamps work too
-python collect.py --start 1700000000 --end 1710000000
+marketgpr collect --start 1700000000 --end 1710000000
 
 # Custom output path
-python collect.py --db my_catalog.db
+marketgpr collect --db my_catalog.db
 
 # Skip event-title enrichment (faster, leaves name as event_ticker)
-python collect.py --no-enrich
+marketgpr collect --no-enrich
 
 # Rate-limit delay between API pages (seconds)
-python collect.py --delay 0.5
+marketgpr collect --delay 0.5
 ```
 
 | Arg | Default | Description |
@@ -65,33 +68,49 @@ python collect.py --delay 0.5
 
 Collection is idempotent — `INSERT OR IGNORE` means partial runs resume cleanly.
 
-### `clean.py` — filter the catalog
+### `marketgpr clean` — filter the catalog
 
 Filters an existing catalog by keywords and regex patterns. Writes matching rows
 to a new database — the original is never modified.
 
 ```bash
 # Use full config file
-python clean.py --db data/kalshi_catalog.db --config filters.json
+marketgpr clean --db data/kalshi_catalog.db --config filters.json
 
-# Inline keywords (comma-separated)
-python clean.py --db data/kalshi_catalog.db --keep "war,election" --remove "NBA,NFL"
+# Inline keywords — keep rows matching ANY keep keyword, drop rows matching ANY remove keyword
+marketgpr clean --db data/kalshi_catalog.db --keep "war,election" --remove "NBA,NFL"
 
-# Dry run — preview counts without writing
-python clean.py --db data/kalshi_catalog.db --config filters.json --dry-run
+# Field-specific filters
+marketgpr clean --db data/kalshi_catalog.db --ticker-keep "GOV" --ticker-remove "MENTION"
+
+# Regex patterns
+marketgpr clean --db data/kalshi_catalog.db --keep-regex "war|conflict" --remove-regex "above \\d+"
+
+# Dry run — preview counts and samples without writing
+marketgpr clean --db data/kalshi_catalog.db --config filters.json --dry-run
 
 # Custom output path
-python clean.py --db data/kalshi_catalog.db --output cleaned.db
+marketgpr clean --db data/kalshi_catalog.db --output cleaned.db
+
+# Skip confirmation prompt
+marketgpr clean --db data/kalshi_catalog.db --config filters.json -y
 ```
 
 | Arg | Default | Description |
 |-----|---------|-------------|
 | `--db` | *(required)* | Input SQLite database |
-| `--config` | `filters.json` | JSON file with keep/remove rules |
-| `--keep` | *(none)* | Comma-separated keywords — keep rows matching ANY |
-| `--remove` | *(none)* | Comma-separated keywords — drop rows matching ANY |
+| `--config` | *(none)* | JSON file with keep/remove rules |
+| `--keep` | *(none)* | Comma-separated keywords — keep rows matching ANY (name LIKE) |
+| `--remove` | *(none)* | Comma-separated keywords — drop rows matching ANY (name LIKE) |
+| `--keep-regex` | *(none)* | Regex patterns — keep rows matching ANY (name REGEXP) |
+| `--remove-regex` | *(none)* | Regex patterns — drop rows matching ANY (name REGEXP) |
+| `--ticker-keep` | *(none)* | Keywords for ticker column — keep (ticker LIKE) |
+| `--ticker-remove` | *(none)* | Keywords for ticker column — drop (ticker LIKE) |
+| `--ticker-keep-regex` | *(none)* | Regex for ticker column — keep (ticker REGEXP) |
+| `--ticker-remove-regex` | *(none)* | Regex for ticker column — drop (ticker REGEXP) |
 | `--output` | `<input>_cleaned.db` | Output database path |
 | `--dry-run` | false | Preview counts and samples without writing |
+| `-y` / `--yes` | false | Skip confirmation prompt |
 
 ---
 
@@ -116,8 +135,8 @@ python clean.py --db data/kalshi_catalog.db --output cleaned.db
 | `{"pattern":"MENTION","field":"ticker"}` | ticker | LIKE | `ticker LIKE '%MENTION%'` |
 | `{"pattern":"^KX.*T$","field":"ticker","type":"regex"}` | ticker | REGEXP | `ticker REGEXP '^KX.*T$'` |
 
-All matching is case-insensitive. Inline keywords from `--keep` and `--remove` are
-merged with the config file entries.
+All matching is case-insensitive. Inline keywords from CLI flags are merged with
+the config file entries.
 
 ---
 
@@ -156,11 +175,18 @@ INDEX idx_expiry ON contracts(expiry_date)
 
 ```
 M-GPR-data-collection/
-├── collect.py               # Catalog builder (Kalshi API → DB)
-├── clean.py                 # Contract cleaner (keyword + regex filters)
-├── db.py                    # Shared module (schema, connections, metadata)
-├── filters.json             # Curated exclusion rules (76 patterns)
-├── data/                    # Runtime output (DBs, logs, manifests)
+├── pyproject.toml                # Package metadata + entry point
+├── marketgpr/
+│   ├── __init__.py
+│   ├── __main__.py               # python -m marketgpr
+│   ├── cli.py                    # CLI entry point (argparse subcommands)
+│   ├── db.py                     # Shared module (schema, connections, logging)
+│   └── commands/
+│       ├── collect.py            # Catalog builder (Kalshi API → DB)
+│       └── clean.py              # Contract cleaner (keyword + regex filters)
+├── filters.json                  # Curated exclusion rules (76 patterns)
+├── CLI_GUIDE.md                  # Detailed CLI walkthrough
+├── data/                         # Runtime output (DBs, logs, manifests)
 │   └── .gitkeep
 ├── README.md
 └── .gitignore
@@ -170,7 +196,7 @@ M-GPR-data-collection/
 
 ## Requirements
 
-- Python 3.8+ (zero external dependencies — stdlib only)
+- Python 3.10+ (zero external dependencies — stdlib only)
 
 Scale estimates for collection:
 
