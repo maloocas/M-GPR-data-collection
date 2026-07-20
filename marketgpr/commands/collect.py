@@ -1,13 +1,13 @@
 """Kalshi Contract Catalog Builder.
 
-Collects every Kalshi contract (ticker, name, expiry date, event ticker)
+Collects every Kalshi contract (ticker, name, event ticker, expiry date)
 within a specified date range from the public API.  Uses both the live and
 historical endpoints to cover the full time window.  Outputs a SQLite database
 suitable as a lightweight index for downstream deep-data puller scripts.
 
 Streams data page-by-page into SQLite to keep memory use low regardless
-of dataset size.  Event-title enrichment runs as a second pass via batched
-API calls and direct DB UPDATE statements.
+of dataset size.  Event-title enrichment is handled separately by the
+``marketgpr enrich`` command.
 """
 
 import argparse
@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from marketgpr.db import (DATA_DIR, CREATE_CONTRACTS, CREATE_ENRICH_TEMP,
+from marketgpr.db import (DATA_DIR, CREATE_CONTRACTS,
                           accent, dim, header, highlight, info, init_db, ok, warn,
                           write_manifest)
 
@@ -99,32 +99,24 @@ def _fetch(url: str) -> dict:
 
 def stream_insert(conn, markets: list[dict], fetched_at: str) -> int:
     """Insert a page of markets.  Name is initially set to the ticker as
-    a placeholder; enrichment fills it in later.  Also populates a temp table
-    (_enrich) with ticker->event_ticker mappings for the enrichment phase.
+    a placeholder; enrichment fills it in later.  event_ticker is stored
+    permanently so the standalone enrich command can use it.
     Returns number newly inserted."""
     rows = []
-    enrich_rows = []
     for m in markets:
         t = m.get("ticker")
         if not t:
             continue
         et = m.get("event_ticker", "")
         close = m.get("close_time", "") or m.get("expected_expiration_time", "") or ""
-        rows.append((t, t, close, fetched_at))
-        if et:
-            enrich_rows.append((t, et))
+        rows.append((t, t, et, close, fetched_at))
     if not rows:
         return 0
     before = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
     conn.executemany(
-        "INSERT OR IGNORE INTO contracts(ticker,name,expiry_date,fetched_at) VALUES (?,?,?,?)",
+        "INSERT OR IGNORE INTO contracts(ticker,name,event_ticker,expiry_date,fetched_at) VALUES (?,?,?,?,?)",
         rows,
     )
-    if enrich_rows:
-        conn.executemany(
-            "INSERT OR IGNORE INTO _enrich(ticker,event_ticker) VALUES (?,?)",
-            enrich_rows,
-        )
     conn.commit()
     after = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
     return after - before
@@ -225,44 +217,6 @@ def collect_historical(conn, start_ts: int,
     return inserted
 
 
-def enrich_titles(conn, delay: float):
-    """Look up every distinct event_ticker from the _enrich temp table,
-    fetch event titles, and UPDATE the name column in contracts."""
-    rows = conn.execute("SELECT DISTINCT event_ticker FROM _enrich").fetchall()
-    tickers = [r[0] for r in rows if r[0]]
-    if not tickers:
-        log.info("Enrich: no event tickers to enrich")
-        return
-    log.info("Enrich: %s unique event tickers to fetch", len(tickers))
-
-    titles: dict[str, str] = {}
-    for i in range(0, len(tickers), 100):
-        batch = tickers[i:i + 100]
-        params = {"tickers": ",".join(batch), "limit": 200}
-        data = _fetch(_url("/events", params))
-        for event in data.get("events", []):
-            t = event.get("event_ticker", "")
-            title = event.get("title", "")
-            if t and title:
-                titles[t] = title
-        if i + 100 < len(tickers):
-            time.sleep(delay)
-
-    log.info("Enrich: fetched %s event titles", len(titles))
-    updated = 0
-    for et, title in titles.items():
-        cur = conn.execute(
-            "UPDATE contracts SET name = ? WHERE ticker IN "
-            "(SELECT ticker FROM _enrich WHERE event_ticker = ?)",
-            (title, et),
-        )
-        updated += cur.rowcount
-    conn.commit()
-    log.info("Enrich: updated %s rows with event titles", updated)
-    conn.execute("DROP TABLE IF EXISTS _enrich")
-    conn.commit()
-
-
 def register_args(parser: argparse.ArgumentParser):
     parser.add_argument("--start", type=parse_date, default=parse_date(DEFAULT_START),
                         help="Beginning of collection window (ISO date or Unix timestamp)")
@@ -272,8 +226,6 @@ def register_args(parser: argparse.ArgumentParser):
                         help="Path to output SQLite database")
     parser.add_argument("--delay", type=float, default=DELAY_SECONDS,
                         help="Pause between API page requests (seconds)")
-    parser.add_argument("--no-enrich", action="store_true",
-                        help="Skip event-title enrichment (leave name as event_ticker)")
 
 
 def run(args: argparse.Namespace):
@@ -316,11 +268,6 @@ def run(args: argparse.Namespace):
                     f"{datetime.fromtimestamp(start_ts, tz=timezone.utc).strftime('%Y-%m-%d')}"
                     f" → cutoff"))
         total_inserted += collect_historical(conn, start_ts, fetched_at, delay)
-
-    if not args.no_enrich:
-        p("")
-        p(highlight(">>> Phase 3: ENRICH event titles"))
-        enrich_titles(conn, delay)
 
     row_count = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
     conn.close()

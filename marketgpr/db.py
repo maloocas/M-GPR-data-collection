@@ -25,16 +25,12 @@ os.makedirs(DATA_DIR, exist_ok=True)
 CREATE_CONTRACTS = """CREATE TABLE IF NOT EXISTS contracts (
     ticker        TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
+    event_ticker  TEXT NOT NULL DEFAULT '',
     expiry_date   TEXT NOT NULL,
     fetched_at    TEXT NOT NULL
 )"""
 
 CREATE_EXPIRY_IDX  = "CREATE INDEX IF NOT EXISTS idx_expiry ON contracts(expiry_date)"
-
-CREATE_ENRICH_TEMP = """CREATE TEMP TABLE IF NOT EXISTS _enrich (
-    ticker       TEXT PRIMARY KEY,
-    event_ticker TEXT NOT NULL
-)"""
 
 BOLD  = "\033[1m"
 DIM   = "\033[2m"
@@ -93,7 +89,6 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA cache_size=-65536")
     conn.execute(CREATE_CONTRACTS)
     conn.execute(CREATE_EXPIRY_IDX)
-    conn.execute(CREATE_ENRICH_TEMP)
     conn.commit()
     return conn
 
