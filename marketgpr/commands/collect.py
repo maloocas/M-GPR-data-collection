@@ -11,26 +11,20 @@ of dataset size.  Event-title enrichment is handled separately by the
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from marketgpr.db import (DATA_DIR, CREATE_CONTRACTS,
+from marketgpr.db import (DATA_DIR, PROD_BASE,
                           accent, dim, header, highlight, info, init_db, ok, warn,
-                          write_manifest)
+                          write_manifest, build_url, fetch_json)
 
-PROD_BASE   = os.environ.get("KALSHI_API_URL", "https://api.elections.kalshi.com/trade-api/v2")
 DEFAULT_START = (datetime.now(timezone.utc) - timedelta(days=730)).strftime("%Y-%m-%d")
 DEFAULT_END   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 PAGE_LIMIT    = 1000
 DELAY_SECONDS = 0.1
-MAX_RETRIES   = 3
-BACKOFF_BASE  = 2
 DB_PATH       = os.path.join(DATA_DIR, "kalshi_catalog.db")
 LOG_PATH      = os.path.join(DATA_DIR, "collection.log")
 
@@ -60,43 +54,6 @@ def parse_date(value: str) -> int:
     raise argparse.ArgumentTypeError(f"Unrecognized date format: {value}")
 
 
-def _url(path: str, params: dict | None = None) -> str:
-    url = f"{PROD_BASE}{path}"
-    if params:
-        cleaned = {k: v for k, v in params.items() if v is not None}
-        if cleaned:
-            qs = "&".join(f"{k}={v}" for k, v in cleaned.items())
-            url = f"{url}?{qs}"
-    return url
-
-
-def _fetch(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    for attempt in range(MAX_RETRIES):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                body = resp.read().decode("utf-8")
-                log.debug("GET %s -> %s", url, resp.status)
-                return json.loads(body)
-        except urllib.error.HTTPError as exc:
-            status = exc.code
-            if status == 429 or status >= 500:
-                wait = BACKOFF_BASE ** attempt
-                log.warning("HTTP %s on %s, retrying in %ss (attempt %s/%s)",
-                            status, url, wait, attempt + 1, MAX_RETRIES)
-                time.sleep(wait)
-            else:
-                log.error("HTTP %s on %s: %s", status, url,
-                          exc.read().decode("utf-8", errors="replace")[:300])
-                raise
-        except Exception:
-            wait = BACKOFF_BASE ** attempt
-            log.warning("Request failed on %s, retrying in %ss (attempt %s/%s)",
-                        url, wait, attempt + 1, MAX_RETRIES)
-            time.sleep(wait)
-    raise RuntimeError(f"Failed to fetch {url} after {MAX_RETRIES} attempts")
-
-
 def stream_insert(conn, markets: list[dict], fetched_at: str) -> int:
     """Insert a page of markets.  Name is initially set to the ticker as
     a placeholder; enrichment fills it in later.  event_ticker is stored
@@ -123,7 +80,7 @@ def stream_insert(conn, markets: list[dict], fetched_at: str) -> int:
 
 
 def get_cutoff() -> float:
-    data = _fetch(_url("/historical/cutoff"))
+    data = fetch_json(build_url("/historical/cutoff"))
     ts = data.get("market_settled_ts")
     if ts is None:
         raise RuntimeError("market_settled_ts missing from /historical/cutoff response")
@@ -159,7 +116,7 @@ def collect_live(conn, start_ts: int, end_ts: int,
                         "mve_filter": "exclude"}
         if cursor:
             params["cursor"] = cursor
-        data = _fetch(_url("/markets", params))
+        data = fetch_json(build_url("/markets", params))
         items = data.get("markets", [])
         page += 1
         cursor = data.get("cursor")
@@ -188,7 +145,7 @@ def collect_historical(conn, start_ts: int,
         params: dict = {"limit": PAGE_LIMIT, "mve_filter": "exclude"}
         if cursor:
             params["cursor"] = cursor
-        data = _fetch(_url("/historical/markets", params))
+        data = fetch_json(build_url("/historical/markets", params))
         items = data.get("markets", [])
         page += 1
         cursor = data.get("cursor")

@@ -6,52 +6,16 @@ Never modifies the original database.
 """
 
 import argparse
-import json
 import os
 import sqlite3
 import sys
 import time
-import urllib.error
-import urllib.request
 
 from marketgpr.db import (CREATE_CONTRACTS, CREATE_EXPIRY_IDX,
-                          accent, dim, header, highlight, info, ok, warn,
-                          connect_readonly)
+                          accent, dim, err, header, highlight, info, ok, warn,
+                          connect_readonly, build_url, fetch_json)
 
-PROD_BASE = os.environ.get("KALSHI_API_URL",
-                           "https://api.elections.kalshi.com/trade-api/v2")
-MAX_RETRIES = 3
-BACKOFF_BASE = 2
-
-
-def _url(path: str, params: dict | None = None) -> str:
-    url = f"{PROD_BASE}{path}"
-    if params:
-        cleaned = {k: v for k, v in params.items() if v is not None}
-        if cleaned:
-            qs = "&".join(f"{k}={v}" for k, v in cleaned.items())
-            url = f"{url}?{qs}"
-    return url
-
-
-def _fetch(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    for attempt in range(MAX_RETRIES):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                body = resp.read().decode("utf-8")
-                return json.loads(body)
-        except urllib.error.HTTPError as exc:
-            status = exc.code
-            if status == 429 or status >= 500:
-                wait = BACKOFF_BASE ** attempt
-                time.sleep(wait)
-            else:
-                raise
-        except Exception:
-            wait = BACKOFF_BASE ** attempt
-            time.sleep(wait)
-    raise RuntimeError(f"Failed to fetch {url} after {MAX_RETRIES} attempts")
+BATCH_SIZE = 10_000
 
 
 def register_args(parser: argparse.ArgumentParser):
@@ -72,6 +36,7 @@ def resolve_output_path(input_db: str) -> str:
 
 def enrich_database(input_db: str, output_db: str, delay: float) -> int:
     """Read source DB, fetch event titles, write enriched copy.
+    Streams data in batches to keep memory use low.
     Returns number of rows updated."""
     conn = connect_readonly(input_db)
 
@@ -79,14 +44,15 @@ def enrich_database(input_db: str, output_db: str, delay: float) -> int:
         rows = conn.execute(
             "SELECT DISTINCT event_ticker FROM contracts WHERE event_ticker != ''"
         ).fetchall()
-    except sqlite3.OperationalError as exc:
+    except sqlite3.OperationalError:
         conn.close()
-        raise SystemExit(
-            "Error: database lacks an event_ticker column. "
-            "Re-collect with the updated 'marketgpr collect' command."
-        ) from exc
+        p = lambda s: print(s, flush=True)
+        p(err("Error: database lacks an event_ticker column. "
+              "Re-collect with the updated 'marketgpr collect' command."))
+        sys.exit(1)
 
     tickers = [r[0] for r in rows if r[0]]
+    total_rows = conn.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
     conn.close()
 
     p = lambda s: print(s, flush=True)
@@ -94,12 +60,11 @@ def enrich_database(input_db: str, output_db: str, delay: float) -> int:
     titles: dict[str, str] = {}
     if tickers:
         p(accent(f"Found {len(tickers):,} unique event tickers"))
-
         total_batches = (len(tickers) + 99) // 100
         for i in range(0, len(tickers), 100):
             batch = tickers[i:i + 100]
             params = {"tickers": ",".join(batch), "limit": 200}
-            data = _fetch(_url("/events", params))
+            data = fetch_json(build_url("/events", params))
             for event in data.get("events", []):
                 t = event.get("event_ticker", "")
                 title = event.get("title", "")
@@ -110,12 +75,9 @@ def enrich_database(input_db: str, output_db: str, delay: float) -> int:
                   f"{len(batch)} tickers → {len(titles)} titles so far"))
             if i + 100 < len(tickers):
                 time.sleep(delay)
-
         p(ok(f"Fetched {len(titles):,} event titles"))
     else:
         p(info("No event tickers to enrich — copying unchanged."))
-
-    src_conn = connect_readonly(input_db)
 
     if os.path.exists(output_db):
         os.remove(output_db)
@@ -127,24 +89,32 @@ def enrich_database(input_db: str, output_db: str, delay: float) -> int:
     out_conn.execute(CREATE_CONTRACTS)
     out_conn.execute(CREATE_EXPIRY_IDX)
 
-    all_rows = src_conn.execute(
+    src_conn = connect_readonly(input_db)
+    cursor = src_conn.execute(
         "SELECT ticker, name, event_ticker, expiry_date, fetched_at "
         "FROM contracts"
-    ).fetchall()
+    )
 
     updated = 0
-    enriched_rows = []
-    for ticker, name, event_ticker, expiry_date, fetched_at in all_rows:
-        new_name = titles.get(event_ticker, name)
-        enriched_rows.append((ticker, new_name, event_ticker, expiry_date, fetched_at))
-        if new_name != name:
-            updated += 1
-
-    out_conn.executemany(
-        "INSERT INTO contracts(ticker, name, event_ticker, expiry_date, fetched_at) "
-        "VALUES (?,?,?,?,?)",
-        enriched_rows,
-    )
+    batch_count = 0
+    while True:
+        batch = cursor.fetchmany(BATCH_SIZE)
+        if not batch:
+            break
+        enriched_rows = []
+        for ticker, name, event_ticker, expiry_date, fetched_at in batch:
+            new_name = titles.get(event_ticker, name)
+            enriched_rows.append((ticker, new_name, event_ticker, expiry_date, fetched_at))
+            if new_name != name:
+                updated += 1
+        out_conn.executemany(
+            "INSERT INTO contracts(ticker, name, event_ticker, expiry_date, fetched_at) "
+            "VALUES (?,?,?,?,?)",
+            enriched_rows,
+        )
+        batch_count += 1
+        if batch_count % 100 == 0:
+            p(dim(f"  Processing batch {batch_count:,} ..."))
     out_conn.commit()
     out_conn.close()
     src_conn.close()

@@ -9,7 +9,7 @@ import argparse
 import os
 import sys
 
-from marketgpr.db import (accent, bold, dim, err, header, highlight, info,
+from marketgpr.db import (accent, bold, dim, header, highlight, info,
                           ok, warn, connect_readonly)
 
 
@@ -70,13 +70,11 @@ def inspect_database(db_path: str) -> None:
         return
 
     # ── Date range ──
-    try:
-        dr = conn.execute(
-            "SELECT MIN(expiry_date), MAX(expiry_date) FROM contracts"
-        ).fetchone()
+    dr = conn.execute(
+        "SELECT MIN(expiry_date), MAX(expiry_date) FROM contracts"
+    ).fetchone()
+    if dr and dr[0]:
         p(accent(f"  Expiry range:     {_format_ts(dr[0])}  →  {_format_ts(dr[1])}"))
-    except Exception:
-        pass
 
     fetch_range = conn.execute(
         "SELECT MIN(fetched_at), MAX(fetched_at) FROM contracts"

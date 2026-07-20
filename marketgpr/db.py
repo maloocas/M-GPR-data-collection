@@ -13,8 +13,18 @@ import json
 import os
 import re
 import sqlite3
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Optional
+
+PROD_BASE = os.environ.get(
+    "KALSHI_API_URL",
+    "https://api.elections.kalshi.com/trade-api/v2",
+)
+MAX_RETRIES = 3
+BACKOFF_BASE = 2
 
 DATA_DIR = os.environ.get(
     "MARKETGPR_DATA_DIR",
@@ -82,13 +92,21 @@ def highlight(text: str) -> str:
 
 
 def init_db(db_path: str) -> sqlite3.Connection:
-    """Create / open a writable SQLite connection with performance PRAGMAs."""
+    """Create / open a writable SQLite connection with performance PRAGMAs.
+    Migrates old schemas by adding the event_ticker column if missing."""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA cache_size=-65536")
     conn.execute(CREATE_CONTRACTS)
     conn.execute(CREATE_EXPIRY_IDX)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(contracts)").fetchall()}
+    if "event_ticker" not in cols:
+        conn.execute(
+            "ALTER TABLE contracts ADD COLUMN event_ticker TEXT NOT NULL DEFAULT ''"
+        )
+
     conn.commit()
     return conn
 
@@ -144,3 +162,37 @@ def write_manifest(db_path: str, start_ts: int, end_ts: int,
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
     return manifest_path
+
+
+def build_url(path: str, params: dict | None = None) -> str:
+    """Build a full Kalshi API URL with query string."""
+    url = f"{PROD_BASE}{path}"
+    if params:
+        cleaned = {k: v for k, v in params.items() if v is not None}
+        if cleaned:
+            qs = "&".join(f"{k}={v}" for k, v in cleaned.items())
+            url = f"{url}?{qs}"
+    return url
+
+
+def fetch_json(url: str) -> dict:
+    """HTTP GET with retry/backoff.  Returns parsed JSON dict."""
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            if status == 429 or status >= 500:
+                wait = BACKOFF_BASE ** attempt
+                time.sleep(wait)
+            else:
+                raise
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            wait = BACKOFF_BASE ** attempt
+            time.sleep(wait)
+    raise RuntimeError(f"Failed to fetch {url} after {MAX_RETRIES} attempts")

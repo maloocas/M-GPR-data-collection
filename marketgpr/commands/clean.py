@@ -128,7 +128,7 @@ def filter_database(
     keep_where, keep_params = build_where_clause(keep_rules)
     remove_where, remove_params = build_where_clause(remove_rules)
 
-    sql = "SELECT rowid, ticker, name, expiry_date, fetched_at FROM contracts"
+    sql = "SELECT rowid, ticker, name, event_ticker, expiry_date, fetched_at FROM contracts"
     conditions: List[str] = []
     all_params: list = []
 
@@ -144,7 +144,7 @@ def filter_database(
 
     if dry_run:
         count_sql = sql.replace(
-            "SELECT rowid, ticker, name, expiry_date, fetched_at",
+            "SELECT rowid, ticker, name, event_ticker, expiry_date, fetched_at",
             "SELECT COUNT(*)",
         )
         final_count = conn.execute(count_sql, all_params).fetchone()[0]
@@ -194,7 +194,7 @@ def filter_database(
         }
 
     count_sql = sql.replace(
-        "SELECT rowid, ticker, name, expiry_date, fetched_at",
+        "SELECT rowid, ticker, name, event_ticker, expiry_date, fetched_at",
         "SELECT COUNT(*)",
     )
     final_count = conn.execute(count_sql, all_params).fetchone()[0]
@@ -231,8 +231,8 @@ def filter_database(
 
     rows = conn.execute(sql, all_params).fetchall()
     out_conn.executemany(
-        "INSERT INTO contracts(ticker, name, expiry_date, fetched_at) VALUES (?,?,?,?)",
-        [(r[1], r[2], r[3], r[4]) for r in rows],
+        "INSERT INTO contracts(ticker, name, event_ticker, expiry_date, fetched_at) VALUES (?,?,?,?,?)",
+        [(r[1], r[2], r[3], r[4], r[5]) for r in rows],
     )
     out_conn.commit()
     out_conn.close()
