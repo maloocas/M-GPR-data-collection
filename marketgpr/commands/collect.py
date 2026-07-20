@@ -317,7 +317,7 @@ def run(args: argparse.Namespace):
                     f" → cutoff"))
         total_inserted += collect_historical(conn, start_ts, fetched_at, delay)
 
-    if not args.no_enrich and total_inserted:
+    if not args.no_enrich:
         p("")
         p(highlight(">>> Phase 3: ENRICH event titles"))
         enrich_titles(conn, delay)
